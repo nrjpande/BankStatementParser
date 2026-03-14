@@ -274,7 +274,7 @@ async def upload_statement(file: UploadFile = File(...), user=Depends(get_curren
 # --- Statements ---
 @app.get("/api/statements")
 def list_statements(user=Depends(get_current_user)):
-    stmts = list(statements_col.find({"user_id": user["user_id"]}, {"_id": 0}).sort("uploaded_at", -1))
+    stmts = list(statements_col.find({"user_id": user["user_id"]}, {"_id": 0}).sort("uploaded_at", -1).limit(100))
     return stmts
 
 
@@ -293,7 +293,7 @@ def get_transactions(statement_id: str, user=Depends(get_current_user)):
     txns = list(transactions_col.find(
         {"statement_id": statement_id, "user_id": user["user_id"]},
         {"_id": 0}
-    ))
+    ).limit(10000))
     return txns
 
 
@@ -328,7 +328,7 @@ def bulk_update_transactions(update: BulkLedgerUpdate, user=Depends(get_current_
 # --- Mapping Rules ---
 @app.get("/api/mapping-rules")
 def get_rules(user=Depends(get_current_user)):
-    rules = list(rules_col.find({"user_id": user["user_id"]}, {"_id": 0}))
+    rules = list(rules_col.find({"user_id": user["user_id"]}, {"_id": 0}).limit(1000))
     return rules
 
 
@@ -364,14 +364,14 @@ def delete_rule(rule_id: str, user=Depends(get_current_user)):
 
 @app.post("/api/apply-rules/{statement_id}")
 def apply_rules(statement_id: str, user=Depends(get_current_user)):
-    rules = list(rules_col.find({"user_id": user["user_id"]}, {"_id": 0}))
+    rules = list(rules_col.find({"user_id": user["user_id"]}, {"_id": 0}).limit(1000))
     if not rules:
         return {"message": "No rules to apply", "updated": 0}
 
     txns = list(transactions_col.find(
         {"statement_id": statement_id, "user_id": user["user_id"]},
         {"_id": 0}
-    ))
+    ).limit(10000))
 
     updated = 0
     for txn in txns:
@@ -394,7 +394,7 @@ def export_tally(statement_id: str, req: ExportRequest = Body(default=ExportRequ
     txns = list(transactions_col.find(
         {"statement_id": statement_id, "user_id": user["user_id"]},
         {"_id": 0}
-    ))
+    ).limit(10000))
 
     if not txns:
         raise HTTPException(status_code=404, detail="No transactions found")
@@ -423,6 +423,7 @@ def dashboard_stats(user=Depends(get_current_user)):
     # Get totals
     pipeline = [
         {"$match": {"user_id": user["user_id"]}},
+        {"$limit": 100000},
         {"$group": {
             "_id": None,
             "total_withdrawals": {"$sum": "$withdrawal"},
