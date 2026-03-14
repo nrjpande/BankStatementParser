@@ -34,8 +34,8 @@ Build a bank statement to Tally automation SaaS app (like Suvit). Upload bank st
 ## What's Been Implemented (March 14, 2026)
 ### Backend (100% API tests passing)
 - [x] Auth: Register, Login, Get Current User
-- [x] File Upload & Parse (Excel, CSV, PDF)
-- [x] Bank Detection (HDFC, ICICI, SBI, Axis, Kotak, Generic)
+- [x] File Upload & Parse (Excel .xlsx/.xls, CSV, PDF)
+- [x] Bank Detection (HDFC, ICICI, SBI, Axis, Kotak, Generic) — scans up to 40 rows deep
 - [x] Narration Cleaning Engine
 - [x] Merchant Detection (40+ merchants)
 - [x] Auto Ledger Suggestion
@@ -45,6 +45,9 @@ Build a bank statement to Tally automation SaaS app (like Suvit). Upload bank st
 - [x] Tally XML Export (valid TallyPrime import format)
 - [x] Dashboard Statistics API
 - [x] Ledger List API (30+ standard ledgers)
+- [x] DB query optimization (limits on all queries)
+- [x] xlrd installed for .xls support
+- [x] Tested with real HDFC Current A/C statement (1,425 transactions, FY 2023-24)
 
 ### Frontend (90%+ tests passing)
 - [x] Login/Register pages with split layout

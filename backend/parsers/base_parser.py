@@ -25,11 +25,14 @@ class BaseParser:
             return value.strftime("%Y-%m-%d")
 
         s = str(value).strip()
+        # Skip asterisks, blank-like rows
+        if s.startswith("*") or not any(c.isdigit() for c in s):
+            return ""
         formats = [
             "%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y",
             "%Y-%m-%d", "%m/%d/%Y", "%d %b %Y", "%d %B %Y",
             "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S",
-            "%d-%b-%Y", "%d-%b-%y", "%d %b %y"
+            "%d-%b-%Y", "%d-%b-%y", "%d %b %y",
         ]
         for fmt in formats:
             try:
@@ -41,10 +44,14 @@ class BaseParser:
     def clean_description(self, value) -> str:
         if pd.isna(value) or value is None:
             return ""
-        return str(value).strip()
+        s = str(value).strip()
+        if s.startswith("*"):
+            return ""
+        return s
 
-    def detect_header_row(self, df: pd.DataFrame, keywords: list) -> int:
-        for idx, row in df.iterrows():
+    def detect_header_row(self, df: pd.DataFrame, keywords: list, max_scan=40) -> int:
+        for idx in range(min(max_scan, len(df))):
+            row = df.iloc[idx]
             row_str = " ".join([str(v).lower() for v in row.values if pd.notna(v)])
             match_count = sum(1 for kw in keywords if kw.lower() in row_str)
             if match_count >= 2:
@@ -64,6 +71,6 @@ class BaseParser:
                 "deposit": self.clean_amount(row.get("deposit", 0)),
                 "balance": self.clean_amount(row.get("balance", 0)),
             }
-            if txn["date"] and (txn["withdrawal"] > 0 or txn["deposit"] > 0):
+            if txn["date"] and txn["description"] and (txn["withdrawal"] > 0 or txn["deposit"] > 0):
                 transactions.append(txn)
         return transactions
