@@ -1,0 +1,161 @@
+{
+  "project_name": "Bank2Tally AI",
+  "design_philosophy": {
+    "archetype": "The Performance Pro",
+    "core_values": ["Precision", "Efficiency", "Trust", "Clarity"],
+    "visual_style": "High Density, Clean Lines, Data-First",
+    "theme_strategy": "Light Mode Default (for data density) with Dark Mode toggle"
+  },
+  "typography": {
+    "font_family": {
+      "headings": ["Chivo", "sans-serif"],
+      "body": ["Inter", "sans-serif"],
+      "data": ["JetBrains Mono", "monospace"]
+    },
+    "scaling": {
+      "h1": "text-4xl font-bold tracking-tight",
+      "h2": "text-2xl font-semibold tracking-tight",
+      "h3": "text-xl font-semibold",
+      "body": "text-sm leading-relaxed",
+      "caption": "text-xs text-muted-foreground",
+      "data_cell": "text-xs font-mono"
+    }
+  },
+  "colors": {
+    "palette": {
+      "primary": {
+        "DEFAULT": "#0f172a",
+        "foreground": "#f8fafc"
+      },
+      "secondary": {
+        "DEFAULT": "#f1f5f9",
+        "foreground": "#0f172a"
+      },
+      "accent": {
+        "DEFAULT": "#2563eb",
+        "foreground": "#ffffff"
+      },
+      "success": {
+        "DEFAULT": "#10b981",
+        "subtle": "#ecfdf5"
+      },
+      "warning": {
+        "DEFAULT": "#f59e0b",
+        "subtle": "#fffbeb"
+      },
+      "error": {
+        "DEFAULT": "#e11d48",
+        "subtle": "#fff1f2"
+      },
+      "background": "#ffffff",
+      "surface": "#f8fafc",
+      "border": "#e2e8f0"
+    },
+    "usage_rules": {
+      "header_bg": "bg-white/80 backdrop-blur-md border-b border-slate-200",
+      "sidebar_bg": "bg-slate-900 text-slate-300",
+      "card_bg": "bg-white border border-slate-200 shadow-sm",
+      "ag_grid_header": "bg-slate-50 text-slate-500 uppercase text-[11px] font-bold tracking-wider"
+    }
+  },
+  "layout_strategy": {
+    "dashboard": {
+      "type": "Bento Grid",
+      "structure": "grid-cols-1 md:grid-cols-4 gap-4",
+      "spacing": "p-6 md:p-8"
+    },
+    "app_shell": {
+      "sidebar_width": "w-64",
+      "content_padding": "px-6 py-8"
+    },
+    "data_tables": {
+      "mode": "Full Width",
+      "container_class": "h-[calc(100vh-200px)] w-full rounded-md border shadow-sm overflow-hidden"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-slate-900 hover:bg-slate-800 text-white shadow-sm rounded-md px-4 py-2 text-sm font-medium transition-colors",
+      "secondary": "bg-white hover:bg-slate-50 text-slate-900 border border-slate-200 shadow-sm rounded-md px-4 py-2 text-sm font-medium transition-colors",
+      "ghost": "hover:bg-slate-100 text-slate-600 hover:text-slate-900 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+      "destructive": "bg-red-600 hover:bg-red-700 text-white rounded-md px-4 py-2 text-sm font-medium transition-colors"
+    },
+    "inputs": {
+      "default": "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+      "search": "pl-9"
+    },
+    "cards": {
+      "wrapper": "rounded-xl border bg-card text-card-foreground shadow-sm",
+      "header": "flex flex-col space-y-1.5 p-6",
+      "content": "p-6 pt-0"
+    }
+  },
+  "visual_enhancers": {
+    "shadows": {
+      "card": "shadow-[0_1px_3px_0_rgb(0,0,0,0.1),0_1px_2px_-1px_rgb(0,0,0,0.1)]",
+      "dropdown": "shadow-[0_4px_6px_-1px_rgb(0,0,0,0.1),0_2px_4px_-2px_rgb(0,0,0,0.1)]",
+      "hover": "hover:shadow-md transition-shadow duration-200"
+    },
+    "borders": {
+      "default": "border border-slate-200",
+      "subtle": "border-slate-100"
+    },
+    "radius": "rounded-lg"
+  },
+  "assets": {
+    "icons": {
+      "library": "@phosphor-icons/react",
+      "style": "Regular or Duotone",
+      "mapping": {
+        "dashboard": "SquaresFour",
+        "upload": "UploadSimple",
+        "transactions": "ListDashes",
+        "mapping_rules": "GitMerge",
+        "export": "Export",
+        "settings": "Gear",
+        "check": "CheckCircle",
+        "warning": "Warning",
+        "error": "XCircle",
+        "ai_sparkle": "Sparkle"
+      }
+    },
+    "images": {
+      "login_bg": "https://images.unsplash.com/photo-1704122545404-56107e7e7adf?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "processing_hero": "https://images.unsplash.com/photo-1772056380786-ac57a47d349d?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "logo_placeholder": "Use a simple typographic logo 'Bank2Tally' in Chivo Black font"
+    }
+  },
+  "ag_grid_styling": {
+    "theme": "ag-theme-alpine",
+    "custom_css": ".ag-theme-alpine { --ag-font-family: 'Inter', sans-serif; --ag-font-size: 13px; --ag-header-background-color: #f8fafc; --ag-header-foreground-color: #64748b; --ag-border-color: #e2e8f0; --ag-row-hover-color: #f1f5f9; --ag-selected-row-background-color: #eff6ff; --ag-row-border-color: #f1f5f9; } .ag-header-cell-label { font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; }",
+    "cell_renderers": {
+      "status": "Badge component (Green for Reconciled, Yellow for Review)",
+      "amount": "Right aligned, monospace font, red for debit, green for credit"
+    }
+  },
+  "accessibility": {
+    "contrast": "WCAG AA compliant colors",
+    "keyboard_nav": "Full keyboard support for grid navigation and form inputs",
+    "focus_states": "Visible focus rings (ring-2 ring-slate-400 ring-offset-2)"
+  },
+  "instructions_to_main_agent": [
+    "1. Setup Shadcn UI with the 'slate' base color.",
+    "2. Install 'ag-grid-react' and 'ag-grid-community' for the transaction table.",
+    "3. Use 'recharts' for the dashboard summary charts (Bar chart for monthly volume, Pie chart for category split).",
+    "4. Implement the 'Upload' page with a drag-and-drop zone using 'react-dropzone'.",
+    "5. For the 'Mapping Rules' page, create a condition builder UI.",
+    "6. Ensure the 'Transaction Table' allows inline editing for the 'Ledger' column.",
+    "7. Use the defined image URLs for the auth pages.",
+    "8. Apply the 'Chivo' font to all headings and 'JetBrains Mono' to financial data.",
+    "9. Create a 'Layout' component that includes the Sidebar and Topbar.",
+    "10. Use 'sonner' for all notifications (e.g., 'File uploaded successfully', 'Export complete')."
+  ],
+  "UNIVERSAL_GUIDELINES": [
+    "Do not use gradients for the main background; keep it clean Slate-50.",
+    "Use 'data-testid' on all interactive elements.",
+    "Ensure all forms have client-side validation using Zod.",
+    "For the 'AI Narration' feature, add a visual indicator (e.g., a small purple dot or icon) next to the narration text to show it was AI-processed.",
+    "The 'Export' button should be prominent (Primary Action) on the Transaction page.",
+    "Support 'Dark Mode' by using Tailwind's 'dark:' modifier (e.g., dark:bg-slate-950 dark:border-slate-800)."
+  ]
+}
