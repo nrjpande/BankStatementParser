@@ -1,10 +1,13 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { AllCommunityModule, provideGlobalGridOptions } from 'ag-grid-community';
 import { AgGridReact } from 'ag-grid-react';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-alpine.css';
 import { transactionsAPI, ledgersAPI, rulesAPI, exportAPI } from '../api/client';
 import { toast } from 'sonner';
+
+provideGlobalGridOptions({ theme: 'legacy' });
 
 export default function TransactionPage() {
   const { statementId } = useParams();
@@ -322,10 +325,11 @@ export default function TransactionPage() {
       <div className="ag-theme-alpine rounded-xl border border-slate-200 shadow-sm overflow-hidden" style={{ height: 'calc(100vh - 320px)', width: '100%' }}>
         <AgGridReact
           ref={gridRef}
+          modules={[AllCommunityModule]}
           rowData={rowData}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
-          rowSelection="multiple"
+          rowSelection={{ mode: 'multiRow' }}
           suppressRowClickSelection={true}
           onSelectionChanged={onSelectionChanged}
           onCellValueChanged={onCellValueChanged}
