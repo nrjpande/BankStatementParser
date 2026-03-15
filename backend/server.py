@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -180,6 +181,9 @@ async def upload_statement(file: UploadFile = File(...), user=Depends(get_curren
 
     if df.empty:
         raise HTTPException(status_code=400, detail="No data found in file")
+
+    # Clean column names - remove newlines, extra spaces
+    df.columns = [re.sub(r'\s+', ' ', str(c).replace('\n', ' ')).strip() for c in df.columns]
 
     bank = detect_bank(df)
     parser = get_parser(bank)

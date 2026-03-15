@@ -1,57 +1,94 @@
 import pandas as pd
+import re
+
+
+def _clean(text):
+    return re.sub(r'\s+', ' ', str(text).replace('\n', ' ')).lower().strip()
 
 
 def detect_bank(df: pd.DataFrame) -> str:
-    columns = [str(c).lower().strip() for c in df.columns]
-    all_text = " ".join(columns)
+    columns = [_clean(c) for c in df.columns]
+    col_text = " ".join(columns)
 
-    # Check first 40 rows for header keywords (real bank statements have headers deep in the file)
-    sample_text = ""
+    # Only check first 10 rows for bank NAME (account info area, not transaction data)
+    header_text = ""
+    for idx in range(min(10, len(df))):
+        row_vals = [_clean(v) for v in df.iloc[idx].values if pd.notna(v)]
+        header_text += " ".join(row_vals) + " "
+
+    # For column keyword matching, check up to 40 rows
+    deep_col_text = ""
     for idx in range(min(40, len(df))):
-        row_vals = [str(v).lower() for v in df.iloc[idx].values if pd.notna(v)]
-        sample_text += " ".join(row_vals) + " "
+        row_vals = [_clean(v) for v in df.iloc[idx].values if pd.notna(v)]
+        deep_col_text += " ".join(row_vals) + " "
 
-    combined = all_text + " " + sample_text
+    all_keywords = col_text + " " + deep_col_text
 
-    # HDFC patterns
-    if "narration" in combined and ("chq" in combined or "ref" in combined or "value dt" in combined):
+    # ---- STEP 1: Explicit bank name in header area ----
+    if "hdfc" in header_text and "hdfc" in col_text:
         return "HDFC"
-    if "hdfc" in combined and ("narration" in combined or "withdrawal" in combined):
-        return "HDFC"
-    if "narration" in all_text and "withdrawal" not in all_text:
-        return "HDFC"
-
-    # ICICI patterns
-    if "transaction date" in combined or ("tran date" in combined and "icici" in combined.lower()):
+    if "icici" in header_text:
         return "ICICI"
-
-    # SBI patterns
-    if "value date" in combined and ("sbi" in combined or "state bank" in combined):
+    if ("state bank" in header_text or ("sbi" in header_text and "sbin" not in header_text)):
         return "SBI"
-
-    # Axis patterns
-    if "axis" in combined and ("tran date" in combined or "particulars" in combined):
+    if "axis" in header_text:
         return "AXIS"
-
-    # Kotak patterns
-    if "kotak" in combined or ("description" in combined and "kotak" in combined):
+    if "kotak" in header_text:
         return "KOTAK"
+    if "idfc" in header_text:
+        return "GENERIC"
+    if "au small" in header_text or "au finance" in header_text:
+        return "GENERIC"
+    if "dbs" in header_text or "digibank" in header_text:
+        return "GENERIC"
+    if "bank of india" in header_text:
+        return "GENERIC"
 
-    # Fallback keyword checks
-    if "value date" in all_text:
-        return "SBI"
-    if "narration" in all_text:
+    # ---- STEP 2: Column-based detection (most reliable) ----
+    # HDFC signature: "narration" column + chq/ref columns
+    if "narration" in all_keywords and ("chq" in all_keywords or "ref" in all_keywords or "value dt" in all_keywords):
         return "HDFC"
-    if "transaction date" in all_text:
+    if "hdfc" in all_keywords and "narration" in all_keywords:
+        return "HDFC"
+
+    # ICICI signature: "transaction date" + "description"
+    if "transaction date" in col_text and "description" in col_text:
         return "ICICI"
-    if "particulars" in all_text:
+
+    # If columns have "Transaction Date" + "Particulars" + "Debit"/"Credit" -> generic (IDFC, AU, etc.)
+    if "transaction date" in col_text and "particulars" in col_text:
+        return "GENERIC"
+
+    # SBI signature: "value date" column (without "transaction date")
+    if "value date" in col_text and "transaction date" not in col_text:
+        if "narration" not in col_text:  # Not HDFC
+            return "SBI"
+
+    # Axis: "tran date" + "particulars"
+    if "tran date" in col_text and "particulars" in col_text:
         return "AXIS"
 
-    # Deep scan fallback
-    if "narration" in sample_text:
+    # ---- STEP 3: Fallback column keyword checks ----
+    if "narration" in col_text:
         return "HDFC"
-    if "transaction date" in sample_text:
+    if "transaction date" in col_text:
         return "ICICI"
+    if "value date" in col_text:
+        return "SBI"
+    if "particulars" in col_text:
+        return "GENERIC"
+
+    # ---- STEP 4: Deep scan in data rows ----
+    if "narration" in deep_col_text and "chq" in deep_col_text:
+        return "HDFC"
+    if "narration" in deep_col_text:
+        return "HDFC"
+    if "transaction date" in deep_col_text and "particulars" in deep_col_text:
+        return "GENERIC"
+    if "transaction date" in deep_col_text:
+        return "ICICI"
+    if "particulars" in deep_col_text:
+        return "GENERIC"
 
     return "GENERIC"
 
