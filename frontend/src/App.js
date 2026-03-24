@@ -10,16 +10,15 @@ import UploadPage from './pages/UploadPage';
 import StatementsPage from './pages/StatementsPage';
 import TransactionPage from './pages/TransactionPage';
 import RulesPage from './pages/RulesPage';
+import LedgersPage from './pages/LedgersPage';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
   if (!user) return <Navigate to="/login" replace />;
   return <Layout>{children}</Layout>;
 }
@@ -41,6 +40,7 @@ function AppRoutes() {
       <Route path="/statements" element={<ProtectedRoute><StatementsPage /></ProtectedRoute>} />
       <Route path="/statements/:statementId" element={<ProtectedRoute><TransactionPage /></ProtectedRoute>} />
       <Route path="/rules" element={<ProtectedRoute><RulesPage /></ProtectedRoute>} />
+      <Route path="/ledgers" element={<ProtectedRoute><LedgersPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

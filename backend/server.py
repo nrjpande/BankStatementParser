@@ -2,12 +2,14 @@ import os
 import io
 import re
 import uuid
+import hashlib
+import threading
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Optional, List
 
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Body
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, EmailStr
@@ -15,6 +17,7 @@ from pymongo import MongoClient
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import xml.etree.ElementTree as ET
 
 from parsers.bank_detector import detect_bank, get_parser
 from parsers.pdf_parser import parse_pdf
@@ -46,6 +49,8 @@ users_col = db["users"]
 statements_col = db["statements"]
 transactions_col = db["transactions"]
 rules_col = db["mapping_rules"]
+ledgers_col = db["master_ledgers"]
+upload_jobs_col = db["upload_jobs"]
 
 # Auth
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -57,7 +62,11 @@ JWT_EXPIRY = int(os.environ.get("JWT_EXPIRY_HOURS", "24"))
 # Ensure indexes
 users_col.create_index("email", unique=True)
 transactions_col.create_index("statement_id")
+transactions_col.create_index("user_id")
 rules_col.create_index("user_id")
+ledgers_col.create_index("user_id")
+upload_jobs_col.create_index("job_id")
+statements_col.create_index([("user_id", 1), ("file_hash", 1)])
 
 
 # --- Models ---
@@ -87,6 +96,18 @@ class ExportRequest(BaseModel):
     company_name: str = "My Company"
     bank_ledger: str = "Bank Account"
 
+class LedgerCreate(BaseModel):
+    name: str
+    group: str = ""
+
+class BulkLedgerCreate(BaseModel):
+    ledgers: List[dict]
+
+class MarkReadyRequest(BaseModel):
+    transaction_ids: List[str] = []
+    company_name: str = "My Company"
+    bank_ledger: str = "Bank Account"
+
 
 # --- Auth Helpers ---
 def create_token(user_id: str, email: str) -> str:
@@ -112,6 +133,123 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+# --- Background processing ---
+def process_upload_job(job_id: str, content: bytes, ext: str, filename: str, user_id: str):
+    """Process file upload in background thread."""
+    try:
+        upload_jobs_col.update_one({"job_id": job_id}, {"$set": {"status": "parsing", "progress": 10}})
+
+        if ext == "pdf":
+            df = parse_pdf(content)
+        elif ext == "csv":
+            df = pd.read_csv(io.BytesIO(content))
+        else:
+            df = pd.read_excel(io.BytesIO(content))
+
+        if df.empty:
+            upload_jobs_col.update_one({"job_id": job_id}, {
+                "$set": {"status": "failed", "error": "No data found in file", "progress": 100}
+            })
+            return
+
+        upload_jobs_col.update_one({"job_id": job_id}, {"$set": {"progress": 30}})
+
+        df.columns = [re.sub(r'\s+', ' ', str(c).replace('\n', ' ')).strip() for c in df.columns]
+        bank = detect_bank(df)
+        parser = get_parser(bank)
+        transactions = parser.parse(df)
+
+        if not transactions:
+            upload_jobs_col.update_one({"job_id": job_id}, {
+                "$set": {"status": "failed", "error": "Could not parse any transactions from the file", "progress": 100}
+            })
+            return
+
+        upload_jobs_col.update_one({"job_id": job_id}, {"$set": {"progress": 60}})
+
+        user_rules = list(rules_col.find({"user_id": user_id}, {"_id": 0}))
+
+        statement_id = str(uuid.uuid4())
+        file_hash = hashlib.sha256(content).hexdigest()
+        statement = {
+            "statement_id": statement_id,
+            "user_id": user_id,
+            "filename": filename,
+            "bank_detected": bank,
+            "transaction_count": len(transactions),
+            "file_hash": file_hash,
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        statements_col.insert_one(statement)
+
+        upload_jobs_col.update_one({"job_id": job_id}, {"$set": {"progress": 75}})
+
+        txn_docs = []
+        seen_hashes = set()
+        for txn in transactions:
+            original_desc = txn["description"]
+            cleaned_desc = clean_narration(original_desc)
+            merchant = detect_merchant(original_desc)
+            ledger = suggest_ledger(merchant)
+
+            for rule in user_rules:
+                if rule["keyword"].lower() in original_desc.lower():
+                    ledger = rule["ledger"]
+                    break
+
+            withdrawal = txn.get("withdrawal", 0)
+            deposit = txn.get("deposit", 0)
+            if withdrawal > 0 and deposit > 0:
+                voucher_type = "Contra"
+            elif withdrawal > 0:
+                voucher_type = "Payment"
+            else:
+                voucher_type = "Receipt"
+
+            txn_hash = generate_transaction_hash(txn["date"], original_desc, withdrawal or deposit)
+            is_duplicate = txn_hash in seen_hashes
+            seen_hashes.add(txn_hash)
+
+            txn_id = str(uuid.uuid4())
+            txn_docs.append({
+                "transaction_id": txn_id,
+                "statement_id": statement_id,
+                "user_id": user_id,
+                "date": txn["date"],
+                "description": cleaned_desc,
+                "original_description": original_desc,
+                "withdrawal": withdrawal,
+                "deposit": deposit,
+                "balance": txn.get("balance", 0),
+                "merchant": merchant,
+                "ledger": ledger,
+                "voucher_type": voucher_type,
+                "is_duplicate": is_duplicate,
+                "is_mapped": bool(ledger),
+                "sync_status": "none",
+            })
+
+        if txn_docs:
+            transactions_col.insert_many(txn_docs)
+
+        upload_jobs_col.update_one({"job_id": job_id}, {
+            "$set": {
+                "status": "completed",
+                "progress": 100,
+                "statement_id": statement_id,
+                "bank_detected": bank,
+                "total_transactions": len(txn_docs),
+                "auto_mapped": sum(1 for t in txn_docs if t["is_mapped"]),
+                "duplicates_found": sum(1 for t in txn_docs if t["is_duplicate"]),
+            }
+        })
+
+    except Exception as e:
+        upload_jobs_col.update_one({"job_id": job_id}, {
+            "$set": {"status": "failed", "error": str(e), "progress": 100}
+        })
+
+
 # --- Health ---
 @app.get("/api/health")
 def health():
@@ -133,6 +271,28 @@ def register(req: RegisterRequest):
         "password_hash": pwd_context.hash(req.password),
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
+
+    # Seed default ledgers for new user
+    default_ledgers = [
+        "Cash", "Bank Account", "Bank Charges", "Office Supplies",
+        "Meals & Entertainment", "Travel & Conveyance", "Telephone Charges",
+        "Electricity Charges", "Rent", "Salary", "EMI Payments",
+        "Insurance", "Vehicle Running", "Subscriptions", "Professional Fees",
+        "Printing & Stationery", "Repairs & Maintenance", "Marketing & Advertising",
+        "Interest Received", "Interest Paid", "Commission", "Discount",
+        "Suspense", "Capital Account", "Drawings", "Loans & Advances",
+        "Sundry Debtors", "Sundry Creditors", "GST Input", "GST Output",
+        "TDS Receivable", "TDS Payable", "Miscellaneous Expenses",
+    ]
+    ledger_docs = [{
+        "ledger_id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "name": name,
+        "group": "",
+        "source": "default",
+    } for name in default_ledgers]
+    ledgers_col.insert_many(ledger_docs)
+
     token = create_token(user_id, req.email)
     return {"token": token, "user": {"user_id": user_id, "email": req.email, "name": req.name}}
 
@@ -155,7 +315,7 @@ def get_me(user=Depends(get_current_user)):
     return user
 
 
-# --- Upload & Parse ---
+# --- Upload & Parse (Async with job polling) ---
 @app.post("/api/upload")
 async def upload_statement(file: UploadFile = File(...), user=Depends(get_current_user)):
     if not file.filename:
@@ -166,113 +326,47 @@ async def upload_statement(file: UploadFile = File(...), user=Depends(get_curren
         raise HTTPException(status_code=400, detail="Unsupported file type. Use .xlsx, .xls, .csv, or .pdf")
 
     content = await file.read()
-    if len(content) > 20 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File too large. Max 20MB.")
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large. Max 50MB.")
 
-    try:
-        if ext == "pdf":
-            df = parse_pdf(content)
-        elif ext == "csv":
-            df = pd.read_csv(io.BytesIO(content))
-        else:
-            df = pd.read_excel(io.BytesIO(content))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
+    # Duplicate file check (SHA-256 hash)
+    file_hash = hashlib.sha256(content).hexdigest()
+    existing = statements_col.find_one({"user_id": user["user_id"], "file_hash": file_hash})
+    if existing:
+        return {
+            "job_id": None,
+            "status": "duplicate",
+            "message": f"Duplicate file skipped. This file was already uploaded as '{existing['filename']}' on {existing['uploaded_at'][:10]}.",
+            "existing_statement_id": existing["statement_id"],
+        }
 
-    if df.empty:
-        raise HTTPException(status_code=400, detail="No data found in file")
-
-    # Clean column names - remove newlines, extra spaces
-    df.columns = [re.sub(r'\s+', ' ', str(c).replace('\n', ' ')).strip() for c in df.columns]
-
-    bank = detect_bank(df)
-    parser = get_parser(bank)
-    transactions = parser.parse(df)
-
-    if not transactions:
-        raise HTTPException(status_code=400, detail="Could not parse any transactions from the file")
-
-    # Get user's mapping rules
-    user_rules = list(rules_col.find({"user_id": user["user_id"]}, {"_id": 0}))
-
-    # Create statement record
-    statement_id = str(uuid.uuid4())
-    statement = {
-        "statement_id": statement_id,
+    # Create job and process in background
+    job_id = str(uuid.uuid4())
+    upload_jobs_col.insert_one({
+        "job_id": job_id,
         "user_id": user["user_id"],
         "filename": file.filename,
-        "bank_detected": bank,
-        "transaction_count": len(transactions),
-        "uploaded_at": datetime.now(timezone.utc).isoformat(),
-    }
-    statements_col.insert_one(statement)
+        "status": "processing",
+        "progress": 5,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
 
-    # Process each transaction
-    txn_docs = []
-    seen_hashes = set()
-    for txn in transactions:
-        original_desc = txn["description"]
-        cleaned_desc = clean_narration(original_desc)
-        merchant = detect_merchant(original_desc)
-        ledger = suggest_ledger(merchant)
+    thread = threading.Thread(
+        target=process_upload_job,
+        args=(job_id, content, ext, file.filename, user["user_id"]),
+        daemon=True,
+    )
+    thread.start()
 
-        # Apply user rules
-        for rule in user_rules:
-            if rule["keyword"].lower() in original_desc.lower():
-                ledger = rule["ledger"]
-                break
+    return {"job_id": job_id, "status": "processing", "message": "Upload started. Poll /api/upload/status/{job_id} for progress."}
 
-        # Determine voucher type
-        withdrawal = txn.get("withdrawal", 0)
-        deposit = txn.get("deposit", 0)
-        if withdrawal > 0 and deposit > 0:
-            voucher_type = "Contra"
-        elif withdrawal > 0:
-            voucher_type = "Payment"
-        else:
-            voucher_type = "Receipt"
 
-        # Deduplication
-        txn_hash = generate_transaction_hash(txn["date"], original_desc, withdrawal or deposit)
-        is_duplicate = txn_hash in seen_hashes
-        seen_hashes.add(txn_hash)
-
-        txn_id = str(uuid.uuid4())
-        txn_doc = {
-            "transaction_id": txn_id,
-            "statement_id": statement_id,
-            "user_id": user["user_id"],
-            "date": txn["date"],
-            "description": cleaned_desc,
-            "original_description": original_desc,
-            "withdrawal": withdrawal,
-            "deposit": deposit,
-            "balance": txn.get("balance", 0),
-            "merchant": merchant,
-            "ledger": ledger,
-            "voucher_type": voucher_type,
-            "is_duplicate": is_duplicate,
-            "is_mapped": bool(ledger),
-        }
-        txn_docs.append(txn_doc)
-
-    if txn_docs:
-        transactions_col.insert_many(txn_docs)
-
-    # Remove _id from response
-    for doc in txn_docs:
-        doc.pop("_id", None)
-
-    statement.pop("_id", None)
-
-    return {
-        "statement": statement,
-        "transactions": txn_docs,
-        "bank_detected": bank,
-        "total_transactions": len(txn_docs),
-        "auto_mapped": sum(1 for t in txn_docs if t["is_mapped"]),
-        "duplicates_found": sum(1 for t in txn_docs if t["is_duplicate"]),
-    }
+@app.get("/api/upload/status/{job_id}")
+def upload_status(job_id: str, user=Depends(get_current_user)):
+    job = upload_jobs_col.find_one({"job_id": job_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 # --- Statements ---
@@ -338,7 +432,6 @@ def get_rules(user=Depends(get_current_user)):
 
 @app.post("/api/mapping-rules")
 def create_rule(rule: MappingRuleCreate, user=Depends(get_current_user)):
-    # Check for duplicate keyword
     existing = rules_col.find_one({"user_id": user["user_id"], "keyword": rule.keyword.lower()})
     if existing:
         rules_col.update_one(
@@ -392,7 +485,143 @@ def apply_rules(statement_id: str, user=Depends(get_current_user)):
     return {"message": f"Applied rules to {updated} transactions", "updated": updated}
 
 
-# --- Export ---
+# --- Master Ledgers (DB-backed) ---
+@app.get("/api/ledgers")
+def get_ledgers(user=Depends(get_current_user)):
+    ledger_docs = list(ledgers_col.find({"user_id": user["user_id"]}, {"_id": 0}).sort("name", 1).limit(5000))
+    return ledger_docs
+
+
+@app.get("/api/ledgers/names")
+def get_ledger_names(user=Depends(get_current_user)):
+    """Simple list of ledger names for dropdowns."""
+    names = ledgers_col.distinct("name", {"user_id": user["user_id"]})
+    return sorted(names)
+
+
+@app.post("/api/ledgers")
+def create_ledger(ledger: LedgerCreate, user=Depends(get_current_user)):
+    existing = ledgers_col.find_one({"user_id": user["user_id"], "name": ledger.name})
+    if existing:
+        raise HTTPException(status_code=400, detail="Ledger already exists")
+
+    ledger_id = str(uuid.uuid4())
+    ledgers_col.insert_one({
+        "ledger_id": ledger_id,
+        "user_id": user["user_id"],
+        "name": ledger.name,
+        "group": ledger.group,
+        "source": "manual",
+    })
+    return {"message": "Ledger created", "ledger_id": ledger_id}
+
+
+@app.delete("/api/ledgers/{ledger_id}")
+def delete_ledger(ledger_id: str, user=Depends(get_current_user)):
+    result = ledgers_col.delete_one({"ledger_id": ledger_id, "user_id": user["user_id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Ledger not found")
+    return {"message": "Ledger deleted"}
+
+
+@app.post("/api/ledgers/import-tally-xml")
+async def import_tally_xml(file: UploadFile = File(...), user=Depends(get_current_user)):
+    """Import ledgers from a Tally Master XML file."""
+    content = await file.read()
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        raise HTTPException(status_code=400, detail="Invalid XML file")
+
+    ledger_names = set()
+    # Try various Tally XML structures
+    for tag in ["LEDGER", "STOCKITEM", "COSTCENTRE"]:
+        for elem in root.iter(tag):
+            name = elem.get("NAME") or elem.findtext("NAME") or elem.findtext("LEDGERNAME")
+            if name:
+                ledger_names.add(name.strip())
+
+    # Also try ALLLEDGERENTRIES
+    for entry in root.iter("ALLLEDGERENTRIES.LIST"):
+        name = entry.findtext("LEDGERNAME")
+        if name:
+            ledger_names.add(name.strip())
+
+    # Also try direct LEDGERNAME tags
+    for elem in root.iter("LEDGERNAME"):
+        if elem.text:
+            ledger_names.add(elem.text.strip())
+
+    # Broader: any element with NAME attribute in TALLYMESSAGE
+    for msg in root.iter("TALLYMESSAGE"):
+        for child in msg:
+            name = child.get("NAME")
+            if name:
+                ledger_names.add(name.strip())
+
+    if not ledger_names:
+        raise HTTPException(status_code=400, detail="No ledgers found in the XML file")
+
+    existing_names = set(ledgers_col.distinct("name", {"user_id": user["user_id"]}))
+    new_ledgers = ledger_names - existing_names
+
+    if new_ledgers:
+        docs = [{
+            "ledger_id": str(uuid.uuid4()),
+            "user_id": user["user_id"],
+            "name": name,
+            "group": "",
+            "source": "tally_import",
+        } for name in new_ledgers]
+        ledgers_col.insert_many(docs)
+
+    return {
+        "message": f"Imported {len(new_ledgers)} new ledgers ({len(ledger_names - new_ledgers)} already existed)",
+        "imported": len(new_ledgers),
+        "skipped": len(ledger_names - new_ledgers),
+        "total_in_file": len(ledger_names),
+    }
+
+
+# --- Tally Sync (Mark as Ready + Fetch pending) ---
+@app.post("/api/tally/mark-ready/{statement_id}")
+def mark_ready_for_tally(statement_id: str, req: MarkReadyRequest = Body(default=MarkReadyRequest()), user=Depends(get_current_user)):
+    query = {"statement_id": statement_id, "user_id": user["user_id"], "is_mapped": True}
+    if req.transaction_ids:
+        query["transaction_id"] = {"$in": req.transaction_ids}
+
+    result = transactions_col.update_many(query, {
+        "$set": {
+            "sync_status": "pending_sync",
+            "sync_company": req.company_name,
+            "sync_bank_ledger": req.bank_ledger,
+            "sync_marked_at": datetime.now(timezone.utc).isoformat(),
+        }
+    })
+    return {"message": f"Marked {result.modified_count} transactions as ready for Tally sync", "count": result.modified_count}
+
+
+@app.get("/api/tally/pending")
+def get_pending_sync(user=Depends(get_current_user)):
+    """Fetch transactions pending Tally sync. Used by the local tally_agent."""
+    txns = list(transactions_col.find(
+        {"user_id": user["user_id"], "sync_status": "pending_sync"},
+        {"_id": 0}
+    ).limit(10000))
+    return txns
+
+
+@app.post("/api/tally/confirm-sync")
+def confirm_sync(transaction_ids: List[str] = Body(...), user=Depends(get_current_user)):
+    """Mark transactions as synced after local tally_agent pushes them."""
+    result = transactions_col.update_many(
+        {"transaction_id": {"$in": transaction_ids}, "user_id": user["user_id"]},
+        {"$set": {"sync_status": "synced", "synced_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"synced": result.modified_count}
+
+
+# --- Export XML (kept for backward compat) ---
 @app.post("/api/export/tally/{statement_id}")
 def export_tally(statement_id: str, req: ExportRequest = Body(default=ExportRequest()), user=Depends(get_current_user)):
     txns = list(transactions_col.find(
@@ -403,7 +632,6 @@ def export_tally(statement_id: str, req: ExportRequest = Body(default=ExportRequ
     if not txns:
         raise HTTPException(status_code=404, detail="No transactions found")
 
-    # Add bank_ledger to each transaction
     for txn in txns:
         txn["bank_ledger"] = req.bank_ledger
 
@@ -423,8 +651,9 @@ def dashboard_stats(user=Depends(get_current_user)):
     total_transactions = transactions_col.count_documents({"user_id": user["user_id"]})
     mapped_transactions = transactions_col.count_documents({"user_id": user["user_id"], "is_mapped": True})
     total_rules = rules_col.count_documents({"user_id": user["user_id"]})
+    pending_sync = transactions_col.count_documents({"user_id": user["user_id"], "sync_status": "pending_sync"})
+    synced = transactions_col.count_documents({"user_id": user["user_id"], "sync_status": "synced"})
 
-    # Get totals
     pipeline = [
         {"$match": {"user_id": user["user_id"]}},
         {"$limit": 100000},
@@ -437,12 +666,10 @@ def dashboard_stats(user=Depends(get_current_user)):
     agg_result = list(transactions_col.aggregate(pipeline))
     totals = agg_result[0] if agg_result else {"total_withdrawals": 0, "total_deposits": 0}
 
-    # Recent statements
     recent = list(statements_col.find(
         {"user_id": user["user_id"]}, {"_id": 0}
     ).sort("uploaded_at", -1).limit(5))
 
-    # Ledger distribution
     ledger_pipeline = [
         {"$match": {"user_id": user["user_id"], "ledger": {"$ne": ""}}},
         {"$group": {"_id": "$ledger", "count": {"$sum": 1}, "total": {"$sum": {"$add": ["$withdrawal", "$deposit"]}}}},
@@ -458,30 +685,10 @@ def dashboard_stats(user=Depends(get_current_user)):
         "mapped_transactions": mapped_transactions,
         "unmapped_transactions": total_transactions - mapped_transactions,
         "total_rules": total_rules,
+        "pending_sync": pending_sync,
+        "synced": synced,
         "total_withdrawals": totals.get("total_withdrawals", 0),
         "total_deposits": totals.get("total_deposits", 0),
         "recent_statements": recent,
         "ledger_distribution": ledger_distribution,
     }
-
-
-# --- Ledger List ---
-COMMON_LEDGERS = [
-    "Cash", "Bank Account", "Bank Charges", "Office Supplies",
-    "Meals & Entertainment", "Travel & Conveyance", "Telephone Charges",
-    "Electricity Charges", "Rent", "Salary", "EMI Payments",
-    "Insurance", "Vehicle Running", "Subscriptions", "Professional Fees",
-    "Printing & Stationery", "Repairs & Maintenance", "Marketing & Advertising",
-    "Interest Received", "Interest Paid", "Commission", "Discount",
-    "Suspense", "Capital Account", "Drawings", "Loans & Advances",
-    "Sundry Debtors", "Sundry Creditors", "GST Input", "GST Output",
-    "TDS Receivable", "TDS Payable", "Miscellaneous Expenses",
-]
-
-
-@app.get("/api/ledgers")
-def get_ledgers(user=Depends(get_current_user)):
-    # Get user's custom ledgers from rules
-    user_ledgers = rules_col.distinct("ledger", {"user_id": user["user_id"]})
-    all_ledgers = sorted(set(COMMON_LEDGERS + user_ledgers))
-    return all_ledgers

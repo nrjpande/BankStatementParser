@@ -4,6 +4,7 @@ const API_URL = process.env.REACT_APP_BACKEND_URL;
 
 const api = axios.create({
   baseURL: API_URL,
+  timeout: 120000,
 });
 
 api.interceptors.request.use((config) => {
@@ -38,8 +39,10 @@ export const uploadAPI = {
     form.append('file', file);
     return api.post('/api/upload', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
     });
   },
+  status: (jobId) => api.get(`/api/upload/status/${jobId}`),
 };
 
 export const statementsAPI = {
@@ -60,6 +63,12 @@ export const rulesAPI = {
   apply: (statementId) => api.post(`/api/apply-rules/${statementId}`),
 };
 
+export const tallyAPI = {
+  markReady: (statementId, data) => api.post(`/api/tally/mark-ready/${statementId}`, data),
+  getPending: () => api.get('/api/tally/pending'),
+  confirmSync: (ids) => api.post('/api/tally/confirm-sync', ids),
+};
+
 export const exportAPI = {
   tally: (statementId, data) => api.post(`/api/export/tally/${statementId}`, data, { responseType: 'blob' }),
 };
@@ -70,6 +79,16 @@ export const dashboardAPI = {
 
 export const ledgersAPI = {
   list: () => api.get('/api/ledgers'),
+  names: () => api.get('/api/ledgers/names'),
+  create: (data) => api.post('/api/ledgers', data),
+  delete: (id) => api.delete(`/api/ledgers/${id}`),
+  importTallyXml: (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post('/api/ledgers/import-tally-xml', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
 };
 
 export default api;

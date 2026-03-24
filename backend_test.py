@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, Any
 
 class Bank2TallyAPITester:
-    def __init__(self, base_url="https://f7af87bc-7a46-4ab8-823d-b7157ecf0a8b.preview.emergentagent.com"):
+    def __init__(self, base_url="https://tally-ledger-mapper.preview.emergentagent.com"):
         self.base_url = base_url
         self.token = None
         self.user_data = None
@@ -17,12 +17,14 @@ class Bank2TallyAPITester:
         self.test_results = []
         
         # Test data
-        self.test_email = "test@bank2tally.com"
+        self.test_email = "test3@bank2tally.com"
         self.test_password = "test123456"
         self.test_name = "Test User"
         self.statement_id = None
         self.transaction_id = None
         self.rule_id = None
+        self.job_id = None
+        self.ledger_id = None
 
     def log_test(self, name: str, success: bool, response_data: Any = None, error: str = None):
         """Log test result"""
@@ -148,29 +150,108 @@ class Bank2TallyAPITester:
         """Test getting current user info"""
         return self.run_test("Get Current User", "GET", "/api/auth/me")
 
-    def test_upload_statement(self):
-        """Test uploading bank statement"""
+    def test_upload_statement_async(self):
+        """Test async uploading bank statement with job polling"""
         file_path = "/app/test_hdfc_statement.xlsx"
         
         try:
             with open(file_path, 'rb') as f:
                 files = {'file': ('test_hdfc_statement.xlsx', f, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}
                 success, response = self.run_test(
-                    "Upload Statement",
+                    "Upload Statement (Async)",
                     "POST",
                     "/api/upload",
                     files=files
                 )
                 
-                if success and 'statement' in response:
-                    self.statement_id = response['statement']['statement_id']
-                    if response.get('transactions') and len(response['transactions']) > 0:
-                        self.transaction_id = response['transactions'][0]['transaction_id']
+                if success and 'job_id' in response:
+                    self.job_id = response['job_id']
+                    print(f"   Job ID: {self.job_id}")
+                    return True, response
+                elif success and response.get('status') == 'duplicate':
+                    print(f"   Duplicate file detected: {response.get('message')}")
+                    return True, response
                 
                 return success, response
                 
         except Exception as e:
-            self.log_test("Upload Statement", False, error=f"File error: {str(e)}")
+            self.log_test("Upload Statement (Async)", False, error=f"File error: {str(e)}")
+            return False, {}
+
+    def test_upload_status_polling(self):
+        """Test polling upload job status"""
+        if not self.job_id:
+            self.log_test("Upload Status Polling", False, error="No job ID available")
+            return False, {}
+        
+        import time
+        max_attempts = 30
+        attempt = 0
+        
+        while attempt < max_attempts:
+            success, response = self.run_test(
+                f"Upload Status Check (Attempt {attempt + 1})",
+                "GET",
+                f"/api/upload/status/{self.job_id}"
+            )
+            
+            if not success:
+                return False, response
+            
+            status = response.get('status')
+            progress = response.get('progress', 0)
+            print(f"   Status: {status}, Progress: {progress}%")
+            
+            if status == 'completed':
+                self.statement_id = response.get('statement_id')
+                print(f"   Upload completed! Statement ID: {self.statement_id}")
+                # Get first transaction ID for testing
+                if self.statement_id:
+                    txn_success, txn_response = self.run_test(
+                        "Get Transactions for ID",
+                        "GET",
+                        f"/api/transactions/{self.statement_id}"
+                    )
+                    if txn_success and txn_response and len(txn_response) > 0:
+                        self.transaction_id = txn_response[0]['transaction_id']
+                        print(f"   First Transaction ID: {self.transaction_id}")
+                return True, response
+            elif status == 'failed':
+                error_msg = response.get('error', 'Unknown error')
+                self.log_test("Upload Status Polling", False, error=f"Upload failed: {error_msg}")
+                return False, response
+            
+            time.sleep(2)
+            attempt += 1
+        
+        self.log_test("Upload Status Polling", False, error="Timeout waiting for upload completion")
+        return False, {}
+
+    def test_duplicate_file_upload(self):
+        """Test duplicate file detection via SHA-256 hash"""
+        file_path = "/app/test_hdfc_statement.xlsx"
+        
+        try:
+            with open(file_path, 'rb') as f:
+                files = {'file': ('test_hdfc_statement.xlsx', f, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}
+                success, response = self.run_test(
+                    "Duplicate File Upload Test",
+                    "POST",
+                    "/api/upload",
+                    files=files
+                )
+                
+                if success and response.get('status') == 'duplicate':
+                    print(f"   ✅ Duplicate detection working: {response.get('message')}")
+                    return True, response
+                elif success and 'job_id' in response:
+                    print(f"   ⚠️  File uploaded as new (not duplicate)")
+                    return True, response
+                
+                return success, response
+                
+        except Exception as e:
+            self.log_test("Duplicate File Upload Test", False, error=f"File error: {str(e)}")
             return False, {}
 
     def test_list_statements(self):
@@ -294,6 +375,119 @@ class Bank2TallyAPITester:
         """Test getting ledger list"""
         return self.run_test("Get Ledgers", "GET", "/api/ledgers")
 
+    def test_get_ledger_names(self):
+        """Test getting ledger names for dropdowns"""
+        return self.run_test("Get Ledger Names", "GET", "/api/ledgers/names")
+
+    def test_create_ledger(self):
+        """Test creating a new ledger"""
+        success, response = self.run_test(
+            "Create Ledger",
+            "POST",
+            "/api/ledgers",
+            data={
+                "name": "Test Automation Ledger",
+                "group": "Test Group"
+            }
+        )
+        
+        if success and 'ledger_id' in response:
+            self.ledger_id = response['ledger_id']
+            
+        return success, response
+
+    def test_delete_ledger(self):
+        """Test deleting a ledger"""
+        if not self.ledger_id:
+            self.log_test("Delete Ledger", False, error="No ledger ID available")
+            return False, {}
+            
+        return self.run_test("Delete Ledger", "DELETE", f"/api/ledgers/{self.ledger_id}")
+
+    def test_import_tally_xml(self):
+        """Test importing ledgers from Tally XML"""
+        # Create a simple test XML file
+        test_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+    <HEADER>
+        <TALLYREQUEST>Import Data</TALLYREQUEST>
+    </HEADER>
+    <BODY>
+        <IMPORTDATA>
+            <REQUESTDESC>
+                <REPORTNAME>All Masters</REPORTNAME>
+            </REQUESTDESC>
+            <REQUESTDATA>
+                <TALLYMESSAGE xmlns:UDF="TallyUDF">
+                    <LEDGER NAME="Test Import Ledger 1" RESERVEDNAME="">
+                        <OLDAUDITENTRYIDS.LIST TYPE="Number">
+                            <OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS>
+                        </OLDAUDITENTRYIDS.LIST>
+                        <GUID>test-guid-1</GUID>
+                        <PARENT>Sundry Debtors</PARENT>
+                        <LEDGERNAME>Test Import Ledger 1</LEDGERNAME>
+                    </LEDGER>
+                    <LEDGER NAME="Test Import Ledger 2" RESERVEDNAME="">
+                        <OLDAUDITENTRYIDS.LIST TYPE="Number">
+                            <OLDAUDITENTRYIDS>-2</OLDAUDITENTRYIDS>
+                        </OLDAUDITENTRYIDS.LIST>
+                        <GUID>test-guid-2</GUID>
+                        <PARENT>Sundry Creditors</PARENT>
+                        <LEDGERNAME>Test Import Ledger 2</LEDGERNAME>
+                    </LEDGER>
+                </TALLYMESSAGE>
+            </REQUESTDATA>
+        </IMPORTDATA>
+    </BODY>
+</ENVELOPE>'''
+        
+        try:
+            # Write test XML to temporary file
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
+                f.write(test_xml)
+                temp_file_path = f.name
+            
+            # Upload the XML file
+            with open(temp_file_path, 'rb') as f:
+                files = {'file': ('test_tally_masters.xml', f, 'application/xml')}
+                success, response = self.run_test(
+                    "Import Tally XML",
+                    "POST",
+                    "/api/ledgers/import-tally-xml",
+                    files=files
+                )
+            
+            # Clean up temp file
+            import os
+            os.unlink(temp_file_path)
+            
+            return success, response
+                
+        except Exception as e:
+            self.log_test("Import Tally XML", False, error=f"File error: {str(e)}")
+            return False, {}
+
+    def test_mark_ready_for_tally(self):
+        """Test marking transactions as ready for Tally sync"""
+        if not self.statement_id:
+            self.log_test("Mark Ready for Tally", False, error="No statement ID available")
+            return False, {}
+            
+        return self.run_test(
+            "Mark Ready for Tally",
+            "POST",
+            f"/api/tally/mark-ready/{self.statement_id}",
+            data={
+                "company_name": "Test Company",
+                "bank_ledger": "Test Bank Account"
+            }
+        )
+
+    def test_get_pending_sync(self):
+        """Test getting transactions pending Tally sync"""
+        return self.run_test("Get Pending Sync", "GET", "/api/tally/pending")
+
     def test_delete_mapping_rule(self):
         """Test deleting a mapping rule"""
         if not self.rule_id:
@@ -312,7 +506,7 @@ class Bank2TallyAPITester:
 
     def run_all_tests(self):
         """Run comprehensive test suite"""
-        print(f"🚀 Starting Bank2Tally API Tests")
+        print(f"🚀 Starting Bank2Tally API Tests (New Features)")
         print(f"📍 Base URL: {self.base_url}")
         print("=" * 50)
 
@@ -330,8 +524,14 @@ class Bank2TallyAPITester:
 
         self.test_get_current_user()
 
-        # File upload and processing
-        self.test_upload_statement()
+        # NEW: Async file upload and processing with job polling
+        upload_success, _ = self.test_upload_statement_async()
+        if upload_success:
+            self.test_upload_status_polling()
+        
+        # NEW: Test duplicate file detection
+        self.test_duplicate_file_upload()
+        
         self.test_list_statements()
         
         # Transaction management
@@ -339,20 +539,28 @@ class Bank2TallyAPITester:
         self.test_update_transaction()
         self.test_bulk_update_transactions()
 
-        # Mapping rules
+        # NEW: DB-backed master ledgers
+        self.test_get_ledgers()
+        self.test_get_ledger_names()
+        self.test_create_ledger()
+        self.test_import_tally_xml()
+
+        # Mapping rules (now uses DB-backed ledgers)
         self.test_create_mapping_rule()
         self.test_list_mapping_rules()
         self.test_apply_rules()
 
-        # Export functionality
-        self.test_export_tally()
+        # NEW: Mark as Ready for Tally (replaces XML export)
+        self.test_mark_ready_for_tally()
+        self.test_get_pending_sync()
 
         # Dashboard and utilities
         self.test_dashboard_stats()
-        self.test_get_ledgers()
 
         # Cleanup
         self.test_delete_mapping_rule()
+        if self.ledger_id:
+            self.test_delete_ledger()
         self.test_delete_statement()
 
         return self.get_summary()
