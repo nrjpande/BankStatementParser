@@ -1,93 +1,83 @@
 # Bank2Tally - Product Requirements Document
 
 ## Original Problem Statement
-Build a bank statement to Tally automation SaaS app (like Suvit). Upload bank statements (Excel/CSV/PDF), parse transactions, show in editable AG Grid table, allow ledger mapping with auto-mapping rules, and export to Tally XML. Target users: Chartered Accountants, Accounting Firms.
+Build a bank statement to Tally automation SaaS app (like Suvit). Upload bank statements (Excel/CSV/PDF), parse transactions, show in editable AG Grid table, allow ledger mapping with auto-mapping rules, and export to Tally XML.
 
 ## Architecture
 - **Frontend**: React + AG Grid v35 + Tailwind CSS + Recharts
 - **Backend**: FastAPI (Python) + MongoDB
 - **Auth**: JWT-based email/password
-- **Parser Engine**: HDFC, ICICI, SBI, Axis, Kotak, Generic parsers
+- **Parser Engine**: HDFC, ICICI, SBI, Axis, Kotak, Generic parsers + PDF text extraction
 - **AI Cleaning**: Rule-based narration cleaner + merchant dictionary
+- **Tally Bridge**: Cloud mark-ready + standalone local tally_agent.py
 
-## User Personas
-1. **Chartered Accountant** — Processes 10-50 bank statements/month for clients
-2. **Accounting Firm Staff** — Bulk processes statements, needs auto-mapping
-3. **Business Owner** — Imports own bank data to Tally monthly
+## What's Been Implemented (March 24, 2026)
 
-## Core Requirements (Static)
-- Upload Excel/CSV/PDF bank statements
-- Auto-detect bank format (HDFC, ICICI, SBI, Axis, Kotak, Generic)
-- Parse & normalize transactions to standard format
-- AI narration cleaning (rule-based regex + merchant dictionary)
-- Merchant detection from descriptions
-- Editable AG Grid transaction table
-- Ledger mapping (dropdown with 30+ standard ledgers)
-- Auto-mapping rules engine (keyword -> ledger)
-- Bulk ledger assignment
-- Voucher type auto-detection (Payment/Receipt/Contra)
-- Duplicate transaction detection
-- Tally XML export/download
-- Dashboard with stats & charts
-- JWT authentication
-
-## What's Been Implemented (March 14, 2026)
-### Backend (100% API tests passing)
-- [x] Auth: Register, Login, Get Current User
-- [x] File Upload & Parse (Excel .xlsx/.xls, CSV, PDF)
-- [x] Bank Detection (HDFC, ICICI, SBI, Axis, Kotak, Generic) — scans up to 40 rows deep
-- [x] Narration Cleaning Engine
-- [x] Merchant Detection (40+ merchants)
-- [x] Auto Ledger Suggestion
+### Backend
+- [x] JWT Auth (Register/Login) with default ledger seeding
+- [x] **Async file upload** with background processing + job polling
+- [x] **50MB file size limit** (up from 20MB)
+- [x] **SHA-256 duplicate file detection** — skips re-uploading same files
+- [x] Bank Detection (HDFC, ICICI, SBI, Axis, Kotak, DBS, IDFC, AU Small, BOI, Generic)
+- [x] PDF parsing — table extraction + text-based fallback + multi-line cell handling
+- [x] Excel/CSV parsing (.xlsx, .xls via xlrd, .csv)
+- [x] Narration Cleaning + Merchant Detection (40+ merchants)
+- [x] Auto Ledger Suggestion + User Mapping Rules
+- [x] **DB-backed Master Ledgers** (CRUD + Import from Tally XML)
+- [x] **Tally Sync workflow** — Mark Ready → Pending → Synced
+- [x] Standalone tally_agent.py for local Tally push
+- [x] Dashboard Statistics with sync status counts
 - [x] Transaction CRUD (single + bulk update)
-- [x] Mapping Rules CRUD
-- [x] Apply Rules to Statement
-- [x] Tally XML Export (valid TallyPrime import format)
-- [x] Dashboard Statistics API
-- [x] Ledger List API (30+ standard ledgers)
-- [x] DB query optimization (limits on all queries)
-- [x] xlrd installed for .xls support
-- [x] Tested with real HDFC Current A/C statement (1,425 transactions, FY 2023-24)
 
-### Frontend (90%+ tests passing)
-- [x] Login/Register pages with split layout
-- [x] Sidebar navigation (Dashboard, Upload, Statements, Rules)
-- [x] Dashboard with stat cards, bar chart, pie chart, recent statements
-- [x] Upload page with drag-drop zone
+### Frontend
+- [x] Login/Register with split layout
+- [x] Dashboard with charts + stats
+- [x] **Async Upload page** with job polling progress bar + duplicate detection
 - [x] Statements list page
-- [x] Transaction table with AG Grid v35 (editable, sortable, filterable)
-- [x] Bulk actions (select multiple -> assign ledger)
-- [x] Mapping Rules page (create, list, delete)
-- [x] Tally XML export button
+- [x] **Transaction Table** — Serial # column, single checkbox, no blank columns
+- [x] **Advanced Filter Panel** — Date range, Type, Keyword, Mapped/Unmapped, Clear All
+- [x] **Dynamic KPI Cards** — Total Debits, Credits, Net + Filtered Subtotals
+- [x] **"Mark as Ready for Tally"** button (replaces XML download)
+- [x] **Sync status indicator** column in grid
+- [x] **Master Ledgers page** — Add/Delete/Search + Import from Tally XML
+- [x] Mapping Rules page (uses DB-backed ledgers)
+- [x] Sidebar navigation with 5 sections
+
+### PDF Parsing Tested
+| PDF | Bank | Transactions |
+|-----|------|-------------|
+| DBS.pdf | DBS | 23 |
+| IDFC.pdf | IDFC First | 85 |
+| AU_SMALL.pdf | AU Small Finance | 181 |
+| HDFC_SA.pdf | HDFC Savings | 4 |
+| BOI.pdf | BOI | Password-protected (error handled) |
+
+### Standalone Script
+- [x] `/app/tally_agent.py` — Polls cloud API, builds Tally XML, pushes to localhost:9000
 
 ## Prioritized Backlog
 
-### P0 (Critical - Next Sprint)
-- CSV file upload testing
-- PDF file upload testing
-- Push to Tally endpoint (localhost:9000)
+### P0 (Next)
+- Password-protected PDF support (user provides password)
+- CSV file parsing validation with real files
+- More bank PDF formats (Federal, Canara, Union, PNB)
 
-### P1 (Important)
+### P1
 - Dark mode toggle
-- Multi-statement merge
-- Reconciliation checks (opening/closing balance validation)
-- Custom ledger creation from transaction table
-- Rule auto-creation when mapping in table
+- Reconciliation checks (opening/closing balance)
+- Custom ledger groups
+- Bulk import rules from CSV
 
-### P2 (Nice to Have)
-- AI-powered narration cleaning (LLM integration)
+### P2
+- AI-powered narration cleaning (LLM)
 - ML auto-classification
-- Import ledgers from Tally
-- GST classification (IGST/CGST/SGST)
-- Export to CSV/JSON/PDF report
-- Multi-currency support
+- Multi-statement merge
+- GST classification
 - User settings page
 - Team/multi-user support
-- Undo/redo functionality
 
 ## Next Tasks
-1. Test CSV and PDF parsing end-to-end
-2. Add Push to Tally functionality
-3. Add dark mode
-4. Custom ledger creation from UI
-5. Build reconciliation checks
+1. Test with more real bank PDFs
+2. Add password-protected PDF handling
+3. Build reconciliation checks
+4. Dark mode
