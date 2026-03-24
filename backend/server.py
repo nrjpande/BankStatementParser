@@ -470,17 +470,23 @@ def apply_rules(statement_id: str, user=Depends(get_current_user)):
         {"_id": 0}
     ).limit(10000))
 
-    updated = 0
+    # Batch matching: group transaction IDs by the ledger they should be assigned
+    ledger_to_ids = {}
     for txn in txns:
         desc = txn.get("original_description", txn.get("description", "")).lower()
         for rule in rules:
             if rule["keyword"].lower() in desc:
-                transactions_col.update_one(
-                    {"transaction_id": txn["transaction_id"]},
-                    {"$set": {"ledger": rule["ledger"], "is_mapped": True}}
-                )
-                updated += 1
+                ledger_to_ids.setdefault(rule["ledger"], []).append(txn["transaction_id"])
                 break
+
+    # Bulk update per ledger (one DB call per unique ledger instead of per-transaction)
+    updated = 0
+    for ledger, ids in ledger_to_ids.items():
+        result = transactions_col.update_many(
+            {"transaction_id": {"$in": ids}, "user_id": user["user_id"]},
+            {"$set": {"ledger": ledger, "is_mapped": True}}
+        )
+        updated += result.modified_count
 
     return {"message": f"Applied rules to {updated} transactions", "updated": updated}
 
